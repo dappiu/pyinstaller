@@ -1,12 +1,9 @@
 hiddenimports = ['PySide.QtCore']
 
-from PyInstaller.hooks.hookutils import qt4_plugins_binaries
+from PyInstaller.hooks.pyside_utils import pyside_plugins_binaries
 
 
 def hook(mod):
-    mod.binaries.extend(qt4_plugins_binaries('accessible', pyside=True))
-    mod.binaries.extend(qt4_plugins_binaries('iconengines', pyside=True))
-    mod.binaries.extend(qt4_plugins_binaries('imageformats', pyside=True))
-    mod.binaries.extend(qt4_plugins_binaries('inputmethods', pyside=True))
-    mod.binaries.extend(qt4_plugins_binaries('graphicssystems', pyside=True))
+    mod.binaries.extend(pyside_plugins_binaries('iconengines'))
+    mod.binaries.extend(pyside_plugins_binaries('imageformats'))
     return mod

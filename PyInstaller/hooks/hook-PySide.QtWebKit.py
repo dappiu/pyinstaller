@@ -1,1 +1,1 @@
-hiddenimports = ["PySide.QtCore", "PySide.QtGui", "PySide.QtNetwork"]
+hiddenimports = ["PySide.QtGui", "PySide.QtNetwork"]
