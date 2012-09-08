@@ -2,7 +2,7 @@
 import os
 import sys
 
-d = "qt4_plugins"
+d = "pyside_plugins"
 d = os.path.join(sys._MEIPASS, d)
 
 
