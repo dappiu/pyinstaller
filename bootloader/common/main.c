@@ -122,7 +122,18 @@ int main(int argc, char* argv[])
 #ifdef WIN32
             strcpy(status_list[SELF]->temppathraw, extractionpath);
 #endif
+            /*
+             * Temp path exits - set appropriate flag and change
+             * status->mainpath to point to temppath.
+             */
+            status_list[SELF]->has_temp_directory = true;
+#ifdef WIN32
+            strcpy(status_list[SELF]->mainpath, status_list[SELF]->temppathraw);
+#else
+            strcpy(status_list[SELF]->mainpath, status_list[SELF]->temppath);
+#endif
         }
+
 #if defined(__APPLE__) && defined(WINDOWED)
         ProcessSerialNumber psn = { 0, kCurrentProcess };
         OSStatus returnCode = TransformProcessType(&psn, kProcessTransformToForegroundApplication);
@@ -159,7 +170,7 @@ int main(int argc, char* argv[])
 #endif
 
         VS("Back to parent...\n");
-        if (status_list[SELF]->temppath[0] != 0)
+        if (status_list[SELF]->has_temp_directory == true)
             pyi_remove_temp_path(status_list[SELF]->temppath);
 
         for (i = SELF; status_list[i] != NULL; i++) {
