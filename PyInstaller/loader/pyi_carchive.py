@@ -1,25 +1,16 @@
+#-----------------------------------------------------------------------------
+# Copyright (c) 2013, PyInstaller Development Team.
 #
-# Copyright (C) 2012, Martin Zibricky
-# Copyright (C) 2005, Giovanni Bajo
+# Distributed under the terms of the GNU General Public License with exception
+# for distributing bootloader.
 #
-# Based on previous work under copyright (c) 1999, 2002 McMillan Enterprises, Inc.
-#
-# This program is free software; you can redistribute it and/or
-# modify it under the terms of the GNU General Public License
-# as published by the Free Software Foundation; either version 2
-# of the License, or (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+# The full license is in the file COPYING.txt, distributed with this software.
+#-----------------------------------------------------------------------------
 
 
-# Subclass of Archive that can be understood by a C program (see launch.c).
+"""
+Subclass of Archive that can be understood by a C program (see launch.c).
+"""
 
 
 import struct
@@ -168,7 +159,7 @@ class CArchive(pyi_archive.Archive):
         #       char pylibname[64];    /* Filename of Python dynamic library. */
         #   } COOKIE;
         #
-        self._cookie_format = '!8siiii64s'  
+        self._cookie_format = '!8siiii64s'
         self._cookie_size = struct.calcsize(self._cookie_format)
 
         # A CArchive created from scratch starts at 0, no leading bootloader.
@@ -273,12 +264,8 @@ class CArchive(pyi_archive.Archive):
 
         self.lib.seek(self.pkg_start + dpos)
         rslt = self.lib.read(dlen)
-        if flag == 2:
-            import AES
-            key = rslt[:32]
-            # Note: keep this in sync with bootloader's code.
-            rslt = AES.new(key, AES.MODE_CFB, "\0" * AES.block_size).decrypt(rslt[32:])
-        if flag == 1 or flag == 2:
+
+        if flag == 1:
             rslt = zlib.decompress(rslt)
         if typcd == 'M':
             return (1, rslt)
@@ -331,20 +318,15 @@ class CArchive(pyi_archive.Archive):
             raise
         ulen = len(s)
         assert flag in range(3)
-        if flag == 1 or flag == 2:
+        if flag == 1:
             s = zlib.compress(s, self.LEVEL)
-        if flag == 2:
-            global AES
-            import AES
-            import Crypt
-            key = Crypt.gen_random_key(32)
-            # Note: keep this in sync with bootloader's code
-            s = key + AES.new(key, AES.MODE_CFB, "\0" * AES.block_size).encrypt(s)
+
         dlen = len(s)
         where = self.lib.tell()
         if typcd == 'm':
             if pathnm.find('.__init__.py') > -1:
                 typcd = 'M'
+
         self.toc.add(where, dlen, ulen, flag, typcd, nm)
         self.lib.write(s)
 

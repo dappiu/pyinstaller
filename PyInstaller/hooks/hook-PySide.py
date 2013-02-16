@@ -2,6 +2,7 @@ import os
 import sys
 import site
 
+from PyInstaller.compat import is_darwin
 from PyInstaller import is_win, is_py26, is_py27
 from PyInstaller import compat
 from PyInstaller.hooks.pyside_utils import pyside_plugins_dir
@@ -79,10 +80,10 @@ def prepend_to_dll_search_path(path):
 if is_win:
     prepend_to_dll_search_path(find_first_pyside_path())
 
-# For Qt to work on Mac OS X it is necessary include
-# directory qt_menu.nib. This directory contains some
-# resource files necessary to run PyQt/PySide app.
-if sys.platform.startswith('darwin'):
+# For Qt to work on Mac OS X it is necessary to include directory qt_menu.nib.
+# This directory contains some resource files necessary to run PyQt or PySide
+# app.
+if is_darwin:
     datas = [
         (qt4_menu_nib_dir(), ''),
     ]

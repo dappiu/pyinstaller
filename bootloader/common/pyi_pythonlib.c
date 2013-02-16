@@ -29,31 +29,27 @@
  */
 
 
-// TODO leave only necessary header includes.
-#include <stdio.h>
 #ifdef WIN32
- #include <windows.h>
- #include <direct.h>
- #include <process.h>
- #include <io.h>
+    #include <windows.h>
+    #include <fcntl.h>  // O_BINARY
+    #include <io.h>  // _setmode
+    #include <winsock.h>  // ntohl
 #else
- #include <unistd.h>
- #include <fcntl.h>
- #include <dlfcn.h>
- #include <dirent.h>
- #include <stdarg.h>
+    #include <dlfcn.h>  // dlopen
+    #include <limits.h>  // PATH_MAX
+    #include <netinet/in.h>  // ntohl
 #endif
-#include <sys/types.h>
-#include <sys/stat.h>
+#include <stddef.h>  // ptrdiff_t
+#include <stdio.h>
 #include <string.h>
-#include "zlib.h"
 
+
+/* PyInstaller headers. */
+#include "stb.h"
 #include "pyi_global.h"
+#include "pyi_archive.h"
 #include "pyi_utils.h"
 #include "pyi_python.h"
-#include "pyi_archive.h"
-#include "pyi_pythonlib.h"
-
 
 
 /*
@@ -178,8 +174,8 @@ static int pyi_pylib_set_runtime_opts(ARCHIVE_STATUS *status)
 	}
 	if (unbuffered) {
 #ifdef WIN32
-		_setmode(fileno(stdin), O_BINARY);
-		_setmode(fileno(stdout), O_BINARY);
+		_setmode(fileno(stdin), _O_BINARY);
+		_setmode(fileno(stdout), _O_BINARY);
 #else
 		fflush(stdout);
 		fflush(stderr);

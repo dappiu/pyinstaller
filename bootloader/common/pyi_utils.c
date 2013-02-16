@@ -24,24 +24,23 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <limits.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 
 #ifdef WIN32
     #include <windows.h>
-    #include <direct.h>
-    #include <process.h>
-    #include <io.h>
+    #include <direct.h>  // _mkdir, _rmdir
+    #include <io.h>  // _finddata_t
+    #include <process.h>  // getpid
 #else
-    #include <unistd.h>
-    #include <fcntl.h>
-    #include <dlfcn.h>
     #include <dirent.h>
-    #include <stdarg.h>
+    #include <dlfcn.h>
+    #include <limits.h>  // PATH_MAX
+    #include <unistd.h>  // rmdir, unlink
 #endif
+#include <stddef.h>  // ptrdiff_t
+#include <stdio.h>  // FILE
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>  // struct stat
 
 /*
  * Function 'mkdtemp' (make temporary directory) is missing on some *nix platforms: 
@@ -53,6 +52,11 @@
     #include "mkdtemp.h"
 #endif
 
+
+/* PyInstaller headers. */
+#include "stb.h"
+#include "pyi_global.h"
+#include "pyi_archive.h"
 #include "pyi_utils.h"
 
 
@@ -353,13 +357,13 @@ FILE *pyi_open_target(const char *path, const char* name_)
 	if (stat(fnm, &sbuf) == 0) {
 		OTHERERROR("WARNING: file already exists but should not: %s\n", fnm);
     }
-	return fopen(fnm, "wb");
+	return stb_fopen(fnm, "wb");
 }
 
 /* Copy the file src to dst 4KB per time */
 int pyi_copy_file(const char *src, const char *dst, const char *filename)
 {
-    FILE *in = fopen(src, "rb");
+    FILE *in = stb_fopen(src, "rb");
     FILE *out = pyi_open_target(dst, filename);
     char buf[4096];
     int error = 0;
@@ -467,10 +471,14 @@ char *pyi_path_normalize(const char *path)
 }
 
 
+// TODO use dlclose() when exiting.
 /* Load the shared dynamic library (DLL) */
 dylib_t pyi_dlopen(const char *dllpath)
 {
-#ifndef WIN32
+
+#ifdef WIN32
+    //char buff[PATH_MAX] = NULL;
+#else
     int dlopenMode = RTLD_NOW | RTLD_GLOBAL;
 #endif
 
@@ -482,7 +490,10 @@ dylib_t pyi_dlopen(const char *dllpath)
 #endif
 
 #ifdef WIN32
-	return LoadLibraryExA(dllpath, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    /* Use unicode version of function to load  dll file. */
+	//return LoadLibraryExW(stb_to_utf8(buff, dllpath, sizeof(buff)), NULL,
+            //LOAD_WITH_ALTERED_SEARCH_PATH);
+	return LoadLibraryEx(dllpath, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
 #else
 	return dlopen(dllpath, dlopenMode);
 #endif

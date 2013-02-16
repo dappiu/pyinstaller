@@ -1,34 +1,27 @@
+#-----------------------------------------------------------------------------
+# Copyright (c) 2013, PyInstaller Development Team.
 #
-# Copyright (C) 2005, Giovanni Bajo
-# Based on previous work under copyright (c) 1999, 2002 McMillan Enterprises, Inc.
+# Distributed under the terms of the GNU General Public License with exception
+# for distributing bootloader.
 #
-# This program is free software; you can redistribute it and/or
-# modify it under the terms of the GNU General Public License
-# as published by the Free Software Foundation; either version 2
-# of the License, or (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+# The full license is in the file COPYING.txt, distributed with this software.
+#-----------------------------------------------------------------------------
 
 
-# Build packages using spec files.
+"""
+Build packages using spec files.
+"""
 
 
-import sys
+import glob
+import imp
 import os
-import shutil
 import pprint
 import py_compile
-import imp
+import shutil
+import sys
 import tempfile
 import UserList
-import bindepend
 
 from PyInstaller.loader import pyi_archive, pyi_carchive
 
@@ -38,6 +31,7 @@ import PyInstaller.depend.modules
 from PyInstaller import HOMEPATH, CONFIGDIR, PLATFORM
 from PyInstaller.compat import is_win, is_unix, is_aix, is_darwin, is_cygwin
 import PyInstaller.compat as compat
+import PyInstaller.bindepend as bindepend
 
 from PyInstaller.compat import hashlib
 from PyInstaller.depend import dylib
@@ -349,15 +343,20 @@ class Analysis(Target):
         ))
 
     def __init__(self, scripts=None, pathex=None, hiddenimports=None,
-                 hookspath=None, excludes=None):
+                 hookspath=None, excludes=None, runtime_hooks=[]):
         Target.__init__(self)
+
+        sys._PYI_SETTINGS = {}
+        sys._PYI_SETTINGS['scripts'] = scripts
+
         # Include initialization Python code in PyInstaller analysis.
         _init_code_path = os.path.join(HOMEPATH, 'PyInstaller', 'loader')
         self.inputs = [
-            os.path.join(HOMEPATH, "support", "_pyi_bootstrap.py"),
+            os.path.join(_init_code_path, '_pyi_bootstrap.py'),
+            os.path.join(_init_code_path, 'pyi_importers.py'),
             os.path.join(_init_code_path, 'pyi_archive.py'),
             os.path.join(_init_code_path, 'pyi_carchive.py'),
-            os.path.join(_init_code_path, 'pyi_iu.py'),
+            os.path.join(_init_code_path, 'pyi_os_path.py'),
             ]
         for script in scripts:
             if absnormpath(script) in self._old_scripts:
@@ -366,15 +365,34 @@ class Analysis(Target):
             if not os.path.exists(script):
                 raise ValueError("script '%s' not found" % script)
             self.inputs.append(script)
+
         self.pathex = []
+
+        # Based on main supplied script - add top-level modules directory to PYTHONPATH.
+        # Sometimes the main app script is not top-level module but submodule like 'mymodule.mainscript.py'.
+        # In that case PyInstaller will not be able find modules in the directory containing 'mymodule'.
+        # Add this directory to PYTHONPATH so PyInstaller could find it.
+        for script in scripts:
+            script_toplevel_dir = misc.get_path_to_toplevel_modules(script)
+            if script_toplevel_dir:
+                self.pathex.append(script_toplevel_dir)
+                logger.info('Extending PYTHONPATH with %s', script_toplevel_dir)
+
+        # Normalize paths in pathex and make them absolute.
         if pathex:
             self.pathex = [absnormpath(path) for path in pathex]
+
 
         self.hiddenimports = hiddenimports or []
         # Include modules detected at build time. Like 'codecs' and encodings.
         self.hiddenimports.extend(HIDDENIMPORTS)
 
         self.hookspath = hookspath
+
+        # Custom runtime hook files that should be included and started before
+        # any existing PyInstaller runtime hooks.
+        self.custom_runtime_hooks = runtime_hooks
+
         self.excludes = excludes
         self.scripts = TOC()
         self.pure = TOC()
@@ -417,6 +435,73 @@ class Analysis(Target):
         self.datas = TOC(datas)
         self.hiddenimports = hiddenimports
         return False
+
+    # TODO implement same functionality as 'assemble()'
+    # TODO convert output from 'modulegraph' to PyInstaller format - self.modules.
+    # TODO handle hooks properly.
+    #def assemble(self):
+    def assemble_modulegraph(self):
+        """
+        New assemble function based on module 'modulegraph' for resolving
+        dependencies on Python modules.
+
+        PyInstaller is not able to handle some cases of resolving dependencies.
+        Rather try use a module for that than trying to fix current implementation.
+        """
+        from modulegraph.modulegraph import ModuleGraph
+        from modulegraph.find_modules import get_implies, find_needed_modules
+        from PyInstaller import hooks
+
+        # Python scripts for analysis.
+        _init_code_path = os.path.join(HOMEPATH, 'PyInstaller', 'loader')
+        scripts = [
+            os.path.join(_init_code_path, '_pyi_bootstrap.py'),
+        ]
+
+        #tracker = PyInstaller.depend.imptracker.ImportTrackerModulegraph(
+                #dirs.keys() + self.pathex, self.hookspath, self.excludes)
+
+        # TODO implement the following to get python modules and extension lists:
+        #      process all hooks to get hidden imports and create mapping:
+        def collect_implies():
+            """
+            Collect all hiddenimports from hooks and from modulegraph.
+            """
+            # Dictionary like
+            #   {'mod_name': ['dependent_mod1', dependent_mod2', ...]}
+            implies = get_implies()
+            # TODO implement getting through hooks
+            # TODO use also hook_dir supplied by user
+            hook_dir = os.path.dirname(os.path.abspath(hooks.__file__))
+            files = glob.glob(hook_dir + os.sep + 'hook-*.py')
+            for f in files:
+                # Name of the module this hook is for.
+                mod_name = os.path.basename(f).lstrip('hook-').rstrip('.py')
+                hook_mod_name = 'PyInstaller.hooks.hook-%s' % mod_name
+                # Loaded and initialized hook module.
+                hook_mod = imp.load_source(hook_mod_name, f)
+                if hasattr(hook_mod, 'hiddenimports'):
+                    # Extend the list of implies.
+                    implies[mod_name] = hook_mod.hiddenimports
+            return implies
+
+        #        {'PyQt4.QtGui': ['PyQt4.QtCore', 'sip'], 'another_Mod' ['hidden_import1', 'hidden_import2'], ...}
+        #      supply this mapping as 'implies' keyword to
+        #        modulegraph.modulegraph.ModuleGraph()
+        #      do analysis of scripts - user scripts, pyi_archive, pyi_os_path, pyi_importers, pyi_carchive, _pyi_bootstrap
+        #      find necessary rthooks
+        #      do analysis of rthooks and add it to modulegraph object
+        #      analyze python modules for ctype imports - modulegraph does not do that
+
+        # TODO process other attribute from used pyinstaller hooks.
+        # TODO resolve DLL/so/dylib dependencies.
+        graph = ModuleGraph(
+            path=[_init_code_path] + sys.path,
+            implies=collect_implies(),
+            debug=0)
+        graph = find_needed_modules(graph, scripts=scripts)
+        graph.report()
+
 
     def assemble(self):
         logger.info("running Analysis %s", os.path.basename(self.out))
@@ -485,9 +570,23 @@ class Analysis(Target):
         ###################################################
         # Fills pure, binaries and rthookcs lists to TOC
         pure = []     # pure python modules
-        zipfiles = []  # zipfiles to bundle
+        zipfiles = []  # zipfiles to bundle - zipped Python .egg files.
         datas = []    # datafiles to bundle
         rthooks = []  # rthooks if needed
+
+        # Include custom rthooks (runtime hooks).
+        # The runtime hooks are order dependent. First hooks in the list
+        # are executed first.
+        # Custom hooks are added before Pyinstaller rthooks and thus they are
+        # executed first.
+        if self.custom_runtime_hooks:
+            logger.info("Including custom run-time hooks")
+            # Data structure in format:
+            # ('rt_hook_mod_name', '/rt/hook/file/name.py', 'PYSOURCE')
+            for hook_file in self.custom_runtime_hooks:
+                hook_file = os.path.abspath(hook_file)
+                items = (os.path.splitext(os.path.basename(hook_file))[0], hook_file, 'PYSOURCE')
+                rthooks.append(items)
 
         # Find rthooks.
         logger.info("Looking for run-time hooks")
@@ -534,8 +633,9 @@ class Analysis(Target):
             depmanifest.writeprettyxml()
         self._check_python_library(binaries)
         if zipfiles:
-            scripts.insert(-1, ("_pyi_egg_install.py", os.path.join(HOMEPATH, "support/_pyi_egg_install.py"), 'PYSOURCE'))
-        # Add realtime hooks just before the last script (which is
+            _init_code_path = os.path.join(HOMEPATH, 'PyInstaller', 'loader')
+            scripts.insert(-1, ('_pyi_egg_install.py', os.path.join(_init_code_path, '_pyi_egg_install.py'), 'PYSOURCE'))
+        # Add runtime hooks just before the last script (which is
         # the entrypoint of the application).
         scripts[-1:-1] = rthooks
         self.scripts = TOC(scripts)
@@ -564,81 +664,22 @@ class Analysis(Target):
 
     def _check_python_library(self, binaries):
         """
-        Verify presence of the Python dynamic library. If missing
-        from the binaries try to find the Python library. Set
-        the library name for the bootloader.
-
-        Some linux distributions (e.g. debian-based) statically build the
-        Python executable to the libpython, so bindepend doesn't include
-        it in its output.
-
-        Darwin custom builds could possibly also have non-framework style libraries,
-        so this method also checks for that variant as well.
+        Verify presence of the Python dynamic library in the binary dependencies.
+        Python library is an essential piece that has to be always included.
         """
-        pyver = sys.version_info[:2]
+        python_lib = bindepend.get_python_library_path()
 
-        if is_win:
-            names = ('python%d%d.dll' % pyver,)
-        elif is_cygwin:
-            names = ('libpython%d%d.dll' % pyver,)
-        elif is_darwin:
-            names = ('Python', '.Python', 'libpython%d.%d.dylib' % pyver)
-        elif is_aix:
-            # Shared libs on AIX are archives with shared object members, thus the ".a" suffix.
-            names = ('libpython%d.%d.a' % pyver,)
-        elif is_unix:
-            # Other *nix platforms.
-            names = ('libpython%d.%d.so.1.0' % pyver,)
+        if python_lib:
+            logger.info('Using Python library %s', python_lib)
+            # Presence of library in dependencies.
+            deps = set()
+            for (nm, filename, typ) in binaries:
+                if typ == 'BINARY':
+                    deps.update([filename])
+            if python_lib not in deps:
+                logger.warn('Python dynamic library not included in dependencies!')
         else:
-            raise SystemExit('Your platform is not yet supported.')
-
-        for (nm, fnm, typ) in binaries:
-            for name in names:
-                if typ == 'BINARY' and fnm.endswith(name):
-                    # Python library found.
-                    # FIXME Find a different way how to pass python libname to CArchive.
-                    os.environ['PYI_PYTHON_LIBRARY_NAME'] = name
-                    return  # Stop fuction.
-
-        # Resume search using the first item in names.
-        name = names[0]
-
-        logger.info('Looking for Python library %s', name)
-
-        if is_unix:
-            lib = bindepend.findLibrary(name)
-            if lib is None:
-                raise IOError("Python library not found!")
-
-        elif is_darwin:
-            # On MacPython, Analysis.assemble is able to find the libpython with
-            # no additional help, asking for sys.executable dependencies.
-            # However, this fails on system python, because the shared library
-            # is not listed as a dependency of the binary (most probably it's
-            # opened at runtime using some dlopen trickery).
-            # This happens on Mac OS X when Python is compiled as Framework.
-
-            # Python compiled as Framework contains same values in sys.prefix
-            # and exec_prefix. That's why we can use just sys.prefix.
-            # In virtualenv PyInstaller is not able to find Python library.
-            # We need special care for this case.
-            if compat.is_virtualenv:
-                py_prefix = sys.real_prefix
-            else:
-                py_prefix = sys.prefix
-
-            logger.info('Looking for Python library in %s', py_prefix)
-
-            lib = os.path.join(py_prefix, name)
-            if not os.path.exists(lib):
-                raise IOError("Python library not found!")
-
-        # Python library found.
-        # FIXME Find a different way how to pass python libname to CArchive.
-        os.environ['PYI_PYTHON_LIBRARY_NAME'] = name
-
-        # Include Python library as binary dependency.
-        binaries.append((os.path.basename(lib), lib, 'BINARY'))
+            raise IOError("Python library not found!")
 
 
 def _findRTHook(modnm):
@@ -649,7 +690,7 @@ def _findRTHook(modnm):
         if os.path.isabs(script):
             path = script
         else:
-            path = os.path.join(HOMEPATH, script)
+            path = os.path.join(HOMEPATH, 'PyInstaller', 'loader', 'rthooks', script)
         rslt.append((nm, path, 'PYSOURCE'))
     return rslt
 
@@ -657,7 +698,7 @@ def _findRTHook(modnm):
 class PYZ(Target):
     typ = 'PYZ'
 
-    def __init__(self, toc, name=None, level=9, crypt=None):
+    def __init__(self, toc, name=None, level=9):
         Target.__init__(self)
         self.toc = toc
         self.name = name
@@ -665,16 +706,11 @@ class PYZ(Target):
             self.name = self.out[:-3] + 'pyz'
         # Level of zlib compression.
         self.level = level
-        if config['useCrypt'] and crypt is not None:
-            self.crypt = pyi_archive.Keyfile(crypt).key
-        else:
-            self.crypt = None
         self.dependencies = compile_pycos(config['PYZ_dependencies'])
         self.__postinit__()
 
     GUTS = (('name', _check_guts_eq),
             ('level', _check_guts_eq),
-            ('crypt', _check_guts_eq),
             ('toc', _check_guts_toc),  # todo: pyc=1
             )
 
@@ -691,10 +727,10 @@ class PYZ(Target):
 
     def assemble(self):
         logger.info("building PYZ %s", os.path.basename(self.out))
-        pyz = pyi_archive.ZlibArchive(level=self.level, crypt=self.crypt)
+        pyz = pyi_archive.ZlibArchive(level=self.level)
         toc = self.toc - config['PYZ_dependencies']
         pyz.build(self.name, toc)
-        _save_data(self.out, (self.name, self.level, self.crypt, self.toc))
+        _save_data(self.out, (self.name, self.level, self.toc))
         return 1
 
 
@@ -850,7 +886,7 @@ def checkCache(fnm, strip=0, upx=0, dist_nm=None):
     return cachedfile
 
 
-UNCOMPRESSED, COMPRESSED, ENCRYPTED = range(3)
+UNCOMPRESSED, COMPRESSED = range(2)
 
 
 class PKG(Target):
@@ -867,7 +903,7 @@ class PKG(Target):
                  'DEPENDENCY': 'd'}
 
     def __init__(self, toc, name=None, cdict=None, exclude_binaries=0,
-                 strip_binaries=0, upx_binaries=0, crypt=0):
+                 strip_binaries=0, upx_binaries=0):
         Target.__init__(self)
         self.toc = toc
         self.cdict = cdict
@@ -875,7 +911,6 @@ class PKG(Target):
         self.exclude_binaries = exclude_binaries
         self.strip_binaries = strip_binaries
         self.upx_binaries = upx_binaries
-        self.crypt = crypt
         if name is None:
             self.name = self.out[:-3] + 'pkg'
         if self.cdict is None:
@@ -885,9 +920,6 @@ class PKG(Target):
                           'EXECUTABLE': COMPRESSED,
                           'PYSOURCE': COMPRESSED,
                           'PYMODULE': COMPRESSED}
-            if self.crypt:
-                self.cdict['PYSOURCE'] = ENCRYPTED
-                self.cdict['PYMODULE'] = ENCRYPTED
         self.__postinit__()
 
     GUTS = (('name', _check_guts_eq),
@@ -896,7 +928,6 @@ class PKG(Target):
             ('exclude_binaries', _check_guts_eq),
             ('strip_binaries', _check_guts_eq),
             ('upx_binaries', _check_guts_eq),
-            ('crypt', _check_guts_eq),
             )
 
     def check_guts(self, last_build):
@@ -941,15 +972,14 @@ class PKG(Target):
             else:
                 mytoc.append((inm, fnm, self.cdict.get(typ, 0), self.xformdict.get(typ, 'b')))
 
-        # Bootloader has to know the name of Python library.
-        # FIXME Find a different way how to pass python libname to CArchive.
-        archive = pyi_carchive.CArchive(
-                pylib_name=os.environ['PYI_PYTHON_LIBRARY_NAME'])
+        # Bootloader has to know the name of Python library. Pass python libname to CArchive.
+        pylib_name = os.path.basename(bindepend.get_python_library_path())
+        archive = pyi_carchive.CArchive(pylib_name=pylib_name)
 
         archive.build(self.name, mytoc)
         _save_data(self.out,
                    (self.name, self.cdict, self.toc, self.exclude_binaries,
-                    self.strip_binaries, self.upx_binaries, self.crypt))
+                    self.strip_binaries, self.upx_binaries))
         for item in trash:
             os.remove(item)
         return 1
@@ -971,7 +1001,6 @@ class EXE(Target):
         self.resources = kws.get('resources', [])
         self.strip = kws.get('strip', None)
         self.upx = kws.get('upx', None)
-        self.crypt = kws.get('crypt', 0)
         self.exclude_binaries = kws.get('exclude_binaries', 0)
         self.append_pkg = kws.get('append_pkg', self.append_pkg)
         if self.name is None:
@@ -1000,7 +1029,7 @@ class EXE(Target):
         self.pkg = PKG(self.toc, cdict=kws.get('cdict', None),
                        exclude_binaries=self.exclude_binaries,
                        strip_binaries=self.strip, upx_binaries=self.upx,
-                       crypt=self.crypt)
+                       )
         self.dependencies = self.pkg.dependencies
         self.__postinit__()
 
@@ -1012,7 +1041,6 @@ class EXE(Target):
             ('resources', _check_guts_eq),
             ('strip', _check_guts_eq),
             ('upx', _check_guts_eq),
-            ('crypt', _check_guts_eq),
             ('mtm', None,),  # checked bellow
             )
 
@@ -1036,10 +1064,6 @@ class EXE(Target):
             logger.info("ignoring icon, version, manifest and resources = platform not capable")
 
         mtm = data[-1]
-        crypt = data[-2]
-        if crypt != self.crypt:
-            logger.info("rebuilding %s because crypt option changed", self.outnm)
-            return 1
         if mtm != mtime(self.name):
             logger.info("rebuilding %s because mtimes don't match", self.outnm)
             return True
@@ -1054,7 +1078,7 @@ class EXE(Target):
             exe = exe + 'w'
         if self.debug:
             exe = exe + '_d'
-        return os.path.join("support", "loader", PLATFORM, exe)
+        return os.path.join('PyInstaller', 'bootloader', PLATFORM, exe)
 
     def assemble(self):
         logger.info("building EXE from %s", os.path.basename(self.out))
@@ -1129,7 +1153,7 @@ class EXE(Target):
         os.chmod(self.name, 0755)
         guts = (self.name, self.console, self.debug, self.icon,
                 self.versrsrc, self.resources, self.strip, self.upx,
-                self.crypt, mtime(self.name))
+                mtime(self.name))
         assert len(guts) == len(self.GUTS)
         _save_data(self.out, guts)
         for item in trash:
@@ -1235,7 +1259,7 @@ class BUNDLE(Target):
 
         # icns icon for app bundle.
         self.icon = kws.get('icon', os.path.join(os.path.dirname(__file__),
-            '..', 'source', 'images', 'icon-windowed.icns'))
+            '..', 'bootloader', 'images', 'icon-windowed.icns'))
 
         Target.__init__(self)
         self.name = kws.get('name', None)
@@ -1576,7 +1600,7 @@ def TkPKG():
 
 def build(spec, buildpath):
     global SPECPATH, BUILDPATH, WARNFILE, rthooks, SPEC, specnm
-    rthooks = _load_data(os.path.join(HOMEPATH, 'support', 'rthooks.dat'))
+    rthooks = _load_data(os.path.join(HOMEPATH, 'PyInstaller', 'loader', 'rthooks.dat'))
     SPEC = spec
     SPECPATH, specnm = os.path.split(spec)
     specnm = os.path.splitext(specnm)[0]

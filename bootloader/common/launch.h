@@ -29,29 +29,6 @@
 #ifndef LAUNCH_H
 #define LAUNCH_H
 
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#ifdef WIN32
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
-#include <fcntl.h>
-#ifdef WIN32
-#include <winsock.h> /* for ntohl */
-#else
-#include <netinet/in.h>
-#endif
-
-#include "pyi_archive.h"
-
-/*
- * #defines
- */
-#define MAGIC "MEI\014\013\012\013\016"
-
-
 
 /*****************************************************************
  * The following 4 entries are for applications which may need to
@@ -84,6 +61,12 @@ int init(ARCHIVE_STATUS *status, char const * archivePath, char  const * archive
  * @return 0 on success, non-zero otherwise.
  */
 int extractBinaries(ARCHIVE_STATUS *status_list[]);
+
+/*
+ * Check if binaries need to be extracted. If not, this is probably a onedir
+ * solution, and a child process will not be required on windows.
+ */
+int needToExtractBinaries(ARCHIVE_STATUS *status_list[]);
 
 /**
  * Load Python and execute all scripts in the archive

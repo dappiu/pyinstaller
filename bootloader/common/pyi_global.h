@@ -30,6 +30,7 @@
 #ifndef HEADER_PYI_GLOBAL_H
 #define HEADER_PYI_GLOBAL_H
 
+
 /*
  * Definition of type boolean. On OSX boolean type is available.
  */
@@ -39,7 +40,7 @@ typedef int bool_t;
 #define true  1
 
 
-/* Type type for dynamic library. */
+/* Type for dynamic library. */
 #ifdef WIN32
 #define dylib_t   HINSTANCE
 #else
@@ -60,36 +61,50 @@ typedef int bool_t;
 // TODO use MSVCR function for file path handling.
 #ifdef WIN32
     #define PATH_MAX 4096  /* Default value on Linux. */
-#else
-    #include <limits.h>  /* PATH_MAX available in this header. */
 #endif
+
 
 /*
  * Debug and error macros.
  */
 
+
+/*
+ * On Windows and with windowed mode (no console) show error messages
+ * in message boxes. In windowed mode nothing might be written to console.
+ */
+
 #if defined(WIN32) && defined(WINDOWED)
+    void mbfatalerror(const char *fmt, ...);
     #define FATALERROR mbfatalerror
+
+    void mbothererror(const char *fmt, ...);
     #define OTHERERROR mbothererror
 #else
-    #define FATALERROR printf
-    #define OTHERERROR printf
-#endif
+    #define FATALERROR stbprint
+    #define OTHERERROR stbprint
+#endif /* WIN32 and WINDOWED */
+
+
+/* Enable or disable debug output. */
 
 #ifdef LAUNCH_DEBUG
-# if defined(WIN32) && defined(WINDOWED)
-#  define VS mbvs
-# else
-#  define VS printf
-# endif
+    #if defined(WIN32) && defined(WINDOWED)
+        #define VS mbvs
+        void mbvs(const char *fmt, ...);
+    #else
+        #define VS stbprint
+    #endif
 #else
-# ifdef WIN32
-#  define VS
-# else
-#  define VS(...)
-# endif
+    #ifdef WIN32
+        #define VS
+    #else
+        #define VS(...)
+    #endif
 #endif
 
+
+/* Path separator. */
 
 #ifdef WIN32
     #define PATHSEP ";"
@@ -98,6 +113,21 @@ typedef int bool_t;
     #define PATHSEP ":"
     #define SEP '/'
 #endif
+
+
+/* Rewrite ANSI/POSIX functions to Win32 equivalents. */
+#ifdef WIN32
+    #define fileno           _fileno
+    #define getpid           _getpid
+    #define mkdir            _mkdir
+    #define rmdir            _rmdir
+    #define snprintf         _snprintf
+    #define stat             _stat
+    #define strdup           _strdup
+    #define vsnprintf        _vsnprintf
+#endif
+
+
 
 
 /* Refers to 1st item in the archive status_list. */

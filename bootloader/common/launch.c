@@ -26,92 +26,31 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-// TODO leave only necessary header includes.
-#include <stdio.h>
+
 #ifdef WIN32
- #include <windows.h>
- #include <direct.h>
- #include <process.h>
- #include <io.h>
+    #include <windows.h>
 #else
- #include <unistd.h>
- #include <fcntl.h>
- #include <dlfcn.h>
- #include <dirent.h>
- #include <stdarg.h>
+    #include <limits.h>  // PATH_MAX
 #endif
-#include <sys/types.h>
-#include <sys/stat.h>
-#include "launch.h"
-#include <string.h>
-#include "zlib.h"
+#include <stdarg.h>
+#include <stddef.h>  // ptrdiff_t
+#include <stdio.h>  // vsnprintf
+#include <sys/stat.h>  // struct stat
 
+
+/* PyInstaller headers. */
+#include "stb.h"
 #include "pyi_global.h"
-#include "pyi_python.h"
-#include "pyi_utils.h"
 #include "pyi_archive.h"
+#include "pyi_utils.h"
+#include "pyi_python.h"
 #include "pyi_pythonlib.h"
-
-#ifdef WIN32
-#define snprintf _snprintf
-#define vsnprintf _vsnprintf
-#endif
 
 
 /*
  * The functions in this file defined in reverse order so that forward
  * declarations are not necessary.
  */
-
-
-#if defined(WIN32) && defined(WINDOWED)
-/* The code duplication in the functions below are because
- * standard macros with variable numer of arguments (variadic macros) are
- * supported by Microsoft only starting from Visual C++ 2005.
- */
-
-#define MBTXTLEN 200
-
-void mbfatalerror(const char *fmt, ...)
-{
-	char msg[MBTXTLEN];
-	va_list args;
-
-	va_start(args, fmt);
-	vsnprintf(msg, MBTXTLEN, fmt, args);
-	msg[MBTXTLEN-1] = '\0';
-	va_end(args);
-
-	MessageBox(NULL, msg, "Fatal Error!", MB_OK | MB_ICONEXCLAMATION);
-}
-
-void mbothererror(const char *fmt, ...)
-{
-	char msg[MBTXTLEN];
-	va_list args;
-
-	va_start(args, fmt);
-	vsnprintf(msg, MBTXTLEN, fmt, args);
-	msg[MBTXTLEN-1] = '\0';
-	va_end(args);
-
-	MessageBox(NULL, msg, "Error!", MB_OK | MB_ICONWARNING);
-}
-
-void mbvs(const char *fmt, ...)
-{
-	char msg[MBTXTLEN];
-	va_list args;
-
-	va_start(args, fmt);
-	vsnprintf(msg, MBTXTLEN, fmt, args);
-	msg[MBTXTLEN-1] = '\0';
-	va_end(args);
-
-	MessageBox(NULL, msg, "Tracing", MB_OK);
-}
-
-#endif /* WIN32 and WINDOWED */
 
 
 static int checkFile(char *buf, const char *fmt, ...)
@@ -124,48 +63,6 @@ static int checkFile(char *buf, const char *fmt, ...)
     va_end(args);
 
     return stat(buf, &tmp);
-}
-
-int findDigitalSignature(ARCHIVE_STATUS * const status)
-{
-#ifdef WIN32
-	/* There might be a digital signature attached. Let's see. */
-	char buf[2];
-	int offset = 0, signature_offset = 0;
-	fseek(status->fp, 0, SEEK_SET);
-	fread(buf, 1, 2, status->fp);
-	if (!(buf[0] == 'M' && buf[1] == 'Z'))
-		return -1;
-	/* Skip MSDOS header */
-	fseek(status->fp, 60, SEEK_SET);
-	/* Read offset to PE header */
-	fread(&offset, 4, 1, status->fp);
-	fseek(status->fp, offset+24, SEEK_SET);
-        fread(buf, 2, 1, status->fp);
-        if (buf[0] == 0x0b && buf[1] == 0x01) {
-          /* 32 bit binary */
-          signature_offset = 152;
-        }
-        else if (buf[0] == 0x0b && buf[1] == 0x02) {
-          /* 64 bit binary */
-          signature_offset = 168;
-        }
-        else {
-          /* Invalid magic value */
-          VS("Could not find a valid magic value (was %x %x).\n", (unsigned int) buf[0], (unsigned int) buf[1]);
-          return -1;
-        }
-
-	/* Jump to the fields that contain digital signature info */
-	fseek(status->fp, offset+signature_offset, SEEK_SET);
-	fread(&offset, 4, 1, status->fp);
-	if (offset == 0)
-		return -1;
-  VS("%s contains a digital signature\n", status->archivename);
-	return offset;
-#else
-	return -1;
-#endif
 }
 
 

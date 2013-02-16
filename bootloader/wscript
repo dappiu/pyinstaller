@@ -20,9 +20,9 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
 
 
+import os
 import platform
 import sys
-from distutils import sysconfig as _sysconfig
 
 import Utils
 import Options
@@ -37,7 +37,9 @@ APPNAME=''
 top = '.'
 out = 'build'
 
-# TODO extensive testing with different configuration (should work with Python >= 2.3)
+
+# TODO strip created binaries.
+
 
 def set_options(opt):
     myplatform = Utils.detect_platform()
@@ -182,17 +184,20 @@ def configure(conf):
         # make sure we don't use declarations after statement (break Visual Studio)
         conf.env.append_value('CCFLAGS', '-Wdeclaration-after-statement')
         conf.env.append_value('CCFLAGS', '-Werror')
-    else:
+
+    if not myplatform.startswith('win'):
         # Defines common for Unix and Unix-like platforms.
         # For details see:
         #   http://man.he.net/man7/feature_test_macros
         #
-        # Without these definitions compiling maight fail on OSX.
+        ## Without these definitions compiling maight fail on OSX.
         conf.env.append_value('CCDEFINES', '_POSIX_C_SOURCE=200112L')
         # SUS v2 (UNIX 98) definitions.
         #   Mac OS X 10.5 is UNIX 03 compliant.
         conf.env.append_value('CCDEFINES', '_XOPEN_SOURCE=500')
         conf.env.append_value('CCDEFINES', '_REENTRANT')
+        # Function 'mkdtemp' is available only if _BSD_SOURCE is defined.
+        conf.env.append_value('CCDEFINES', '_BSD_SOURCE')
         
 
     if myplatform.startswith('win'):
@@ -205,7 +210,7 @@ def configure(conf):
     if myplatform.startswith('aix'):
         conf.env.append_value('CCDEFINES', 'AIX')
 
-    conf.env.append_value('CPPPATH', '../common')
+    conf.env.append_value('CPPPATH', os.path.join('..', 'common'))
 
 
     ### Libraries
@@ -239,8 +244,8 @@ def configure(conf):
             conf.env.append_value('LINKFLAGS', '/MACHINE:X86')
         elif myarch == '64bit':
             conf.env.append_value('LINKFLAGS', '/MACHINE:X64')
-            # enable 64bit porting warnings
-            conf.env.append_value('CCFLAGS', '/Wp64')
+        # Enable 64bit porting warnings and other warnings too.
+        conf.env.append_value('CCFLAGS', '/W3')
         # We use SEH exceptions in winmain.c; make sure they are activated.
         conf.env.append_value('CCFLAGS', '/EHa')
     
@@ -342,7 +347,7 @@ def build(bld):
     Options.options.jobs = 1
 
     myplatform = Utils.detect_platform()
-    install_path = '../../support/loader/' + platform.system() + "-" + bld.env.MYARCH
+    install_path = '../../PyInstaller/bootloader/' + platform.system() + "-" + bld.env.MYARCH
     if bld.env.MYMACHINE:
         install_path += '-' + bld.env.MYMACHINE
     targets = dict(release='run', debug='run_d', releasew='runw', debugw='runw_d')
@@ -357,6 +362,7 @@ def build(bld):
                 source = bld.path.ant_glob('zlib/*.c'),
                 target = 'staticlib_zlib',
                 env = bld.env_of_name(key),
+                includes = ['zlib'],
             )
 
         # console
@@ -370,6 +376,7 @@ def build(bld):
                 uselib_local = 'staticlib_zlib',
                 uselib = 'USER32 COMCTL32 KERNEL32 WS2_32',
                 env = bld.env_of_name(key).copy(),
+                includes = ['common', 'windows', 'zlib'],
             )
 
         # windowed
@@ -383,6 +390,7 @@ def build(bld):
                 uselib_local = 'staticlib_zlib',
                 uselib = 'USER32 COMCTL32 KERNEL32 WS2_32',
                 env = bld.env_of_name(key).copy(),
+                includes = ['common', 'windows', 'zlib'],
             )
 
         ## inprocsrvr console
@@ -397,13 +405,14 @@ def build(bld):
         for key, value in dict(release='inprocsrvr', debug='inprocsrvr_d').items():
             bld(
                 features = 'cc cshlib',
-                source = bld.path.ant_glob('common/pyi_utils.c common/pyi_python.c common/pyi_archive.c common/pyi_pythonlib.c common/launch.c windows/dllmain.c'),
+                source = bld.path.ant_glob('common/pyi_*.c common/launch.c windows/dllmain.c'),
                 target = value,
                 install_path = install_path,
                 uselib_local = 'staticlib_zlib',
                 uselib = 'USER32 COMCTL32 KERNEL32 WS2_32',
                 env = bld.env_of_name(key).copy(),
-                linkflags = linkflags_c
+                linkflags = linkflags_c,
+                includes = ['common', 'windows', 'zlib'],
             )
 
         ## inprocsrvr windowed
@@ -411,13 +420,14 @@ def build(bld):
         for key, value in dict(releasew='inprocsrvrw', debugw='inprocsrvrw_d').items():
             bld(
                 features = 'cc cshlib',
-                source = bld.path.ant_glob('common/pyi_utils.c common/pyi_python.c common/pyi_archive.c common/pyi_pythonlib.c common/launch.c windows/dllmain.c'),
+                source = bld.path.ant_glob('common/pyi_*.c common/launch.c windows/dllmain.c'),
                 target = value,
                 install_path = install_path,
                 uselib_local = 'staticlib_zlib',
                 uselib = 'USER32 COMCTL32 KERNEL32 WS2_32',
                 env = bld.env_of_name(key).copy(),
-                linkflags = linkflags_w
+                linkflags = linkflags_w,
+                includes = ['common', 'windows', 'zlib'],
             )
 
     else: # linux, darwin (MacOSX)
@@ -428,6 +438,7 @@ def build(bld):
                 source = bld.path.ant_glob('linux/*.c common/*.c'),
                 target = value,
                 install_path = install_path,
-                uselib = 'DL Z', # 'z' - zlib
+                lib = ['dl', 'z', 'm'],  # 'z' - zlib, 'm' - math,
                 env = bld.env_of_name(key).copy(),
+                includes = ['common', 'linux'],
             )

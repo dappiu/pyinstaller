@@ -66,13 +66,13 @@ def compare(test_name, expect, frozen):
         raise SystemExit('Frozen module has no same attribuses as unfrozen.')
 
 
-# Pure Python module.
+## Pure Python module.
 _expect = exec_python('import xml.etree.ElementTree as ET; print dir(ET)')
 _frozen = str(dir(ET))
 compare('ElementTree', _expect, _frozen)
 
 
-# C-extension Python module.
+## C-extension Python module.
 _expect = exec_python('import xml.etree.cElementTree as cET; print dir(cET)')
 _frozen = str(dir(cET))
 compare('cElementTree', _expect, _frozen)

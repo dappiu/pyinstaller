@@ -25,15 +25,23 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
-#define _WIN32_WINNT 0x0500
-#include <windows.h>
-#include <commctrl.h> // InitCommonControls
-#include <signal.h>
-#include <memory.h>
-#include <string.h>
 
-#include "utils.h"
-#include "pyi_global.h"
+#define _WIN32_WINNT 0x0500
+
+
+#include <windows.h>
+#include <commctrl.h>  // InitCommonControls
+#include <stdio.h>  // _fileno
+#include <io.h>  // _get_osfhandle
+#include <signal.h>  // signal
+
+
+/* PyInstaller headers. */
+#include "stb.h"
+#include "pyi_global.h"  // PATH_MAX
+#include "pyi_archive.h"
+#include "pyi_utils.h"
+
 
 static HANDLE hCtx = INVALID_HANDLE_VALUE;
 static ULONG_PTR actToken;
@@ -41,6 +49,7 @@ static ULONG_PTR actToken;
 #ifndef STATUS_SXS_EARLY_DEACTIVATION
 #define STATUS_SXS_EARLY_DEACTIVATION 0xC015000F
 #endif
+ 	
  	
 int IsXPOrLater(void)
 {

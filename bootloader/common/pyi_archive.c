@@ -28,29 +28,30 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-// TODO leave only necessary header includes.
-#include <stdio.h>
-#ifdef WIN32
- #include <windows.h>
- #include <direct.h>
- #include <process.h>
- #include <io.h>
-#else
- #include <unistd.h>
- #include <fcntl.h>
- #include <dlfcn.h>
- #include <dirent.h>
- #include <stdarg.h>
-#endif
-#include <sys/types.h>
-#include <sys/stat.h>
-#include "launch.h"
-#include <string.h>
-#include "zlib.h"
 
+#ifdef WIN32
+// TODO verify windows includes
+    #include <winsock.h>  // ntohl
+#else
+    #include <limits.h>  // PATH_MAX - not available on windows.
+    #include <netinet/in.h>  // ntohl
+    #include <sys/stat.h>  // fchmod
+#endif
+#include <stddef.h>  // ptrdiff_t
+#include <stdio.h>
+
+
+/* PyInstaller headers. */
+#include "zlib.h"
+#include "stb.h"
+#include "pyi_global.h"
+#include "pyi_archive.h"
 #include "pyi_utils.h"
 #include "pyi_python.h"
-#include "pyi_archive.h"
+
+
+/* Magic number to verify archive data are bundled correctly. */
+#define MAGIC "MEI\014\013\012\013\016"
 
 
 /*
@@ -131,35 +132,8 @@ unsigned char *pyi_arch_extract(ARCHIVE_STATUS *status, TOC *ptoc)
 	    OTHERERROR("Could not read from file\n");
 	    return NULL;
 	}
-	if (ptoc->cflag == '\2') {
-        static PyObject *AES = NULL;
-		PyObject *func_new;
-		PyObject *aes_dict;
-		PyObject *aes_obj;
-		PyObject *ddata;
-		long block_size;
-		char *iv;
 
-		if (!AES)
-			AES = PI_PyImport_ImportModule("AES");
-		aes_dict = PI_PyModule_GetDict(AES);
-		func_new = PI_PyDict_GetItemString(aes_dict, "new");
-		block_size = PI_PyInt_AsLong(PI_PyDict_GetItemString(aes_dict, "block_size"));
-		iv = malloc(block_size);
-		memset(iv, 0, block_size);
-
-		aes_obj = PI_PyObject_CallFunction(func_new, "s#Os#",
-			data, 32,
-			PI_PyDict_GetItemString(aes_dict, "MODE_CFB"),
-			iv, block_size);
-
-		ddata = PI_PyObject_CallMethod(aes_obj, "decrypt", "s#", data+32, ntohl(ptoc->len)-32);
-		memcpy(data, PI_PyString_AsString(ddata), ntohl(ptoc->len)-32);
-		Py_DECREF(aes_obj);
-		Py_DECREF(ddata);
-		VS("decrypted %s\n", ptoc->name);
-	}
-	if (ptoc->cflag == '\1' || ptoc->cflag == '\2') {
+	if (ptoc->cflag == '\1') {
 		tmp = decompress(data, ptoc);
 		free(data);
 		data = tmp;
@@ -225,6 +199,49 @@ static int pyi_arch_check_cookie(ARCHIVE_STATUS *status, int filelen)
 }
 
 
+static int findDigitalSignature(ARCHIVE_STATUS * const status)
+{
+#ifdef WIN32
+	/* There might be a digital signature attached. Let's see. */
+	char buf[2];
+	int offset = 0, signature_offset = 0;
+	fseek(status->fp, 0, SEEK_SET);
+	fread(buf, 1, 2, status->fp);
+	if (!(buf[0] == 'M' && buf[1] == 'Z'))
+		return -1;
+	/* Skip MSDOS header */
+	fseek(status->fp, 60, SEEK_SET);
+	/* Read offset to PE header */
+	fread(&offset, 4, 1, status->fp);
+	fseek(status->fp, offset+24, SEEK_SET);
+        fread(buf, 2, 1, status->fp);
+        if (buf[0] == 0x0b && buf[1] == 0x01) {
+          /* 32 bit binary */
+          signature_offset = 152;
+        }
+        else if (buf[0] == 0x0b && buf[1] == 0x02) {
+          /* 64 bit binary */
+          signature_offset = 168;
+        }
+        else {
+          /* Invalid magic value */
+          VS("Could not find a valid magic value (was %x %x).\n", (unsigned int) buf[0], (unsigned int) buf[1]);
+          return -1;
+        }
+
+	/* Jump to the fields that contain digital signature info */
+	fseek(status->fp, offset+signature_offset, SEEK_SET);
+	fread(&offset, 4, 1, status->fp);
+	if (offset == 0)
+		return -1;
+  VS("%s contains a digital signature\n", status->archivename);
+	return offset;
+#else
+	return -1;
+#endif
+}
+
+
 /*
  * Open the archive.
  * Sets f_archiveFile, f_pkgstart, f_tocbuff and f_cookie.
@@ -237,7 +254,7 @@ int pyi_arch_open(ARCHIVE_STATUS *status)
 	int filelen;
     VS("archivename is %s\n", status->archivename);
 	/* Physically open the file */
-	status->fp = fopen(status->archivename, "rb");
+	status->fp = stb_fopen(status->archivename, "rb");
 	if (status->fp == NULL) {
 		VS("Cannot open archive: %s\n", status->archivename);
 		return -1;

@@ -1,28 +1,11 @@
+#-----------------------------------------------------------------------------
+# Copyright (c) 2013, PyInstaller Development Team.
 #
-# Copyright (C) 2005, Giovanni Bajo
-# Based on previous work under copyright (c) 2002 McMillan Enterprises, Inc.
+# Distributed under the terms of the GNU General Public License with exception
+# for distributing bootloader.
 #
-# This program is free software; you can redistribute it and/or
-# modify it under the terms of the GNU General Public License
-# as published by the Free Software Foundation; either version 2
-# of the License, or (at your option) any later version.
-#
-# In addition to the permissions in the GNU General Public License, the
-# authors give you unlimited permission to link or embed the compiled
-# version of this file into combinations with other programs, and to
-# distribute those combinations without any restriction coming from the
-# use of this file. (The General Public License restrictions do apply in
-# other respects; for example, they cover modification of the file, and
-# distribution when not linked into a combine executable.)
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
+# The full license is in the file COPYING.txt, distributed with this software.
+#-----------------------------------------------------------------------------
 
 
 # Subclasses may not need marshal or struct, but since they're
@@ -272,10 +255,6 @@ class Archive(object):
         self.lib.write(struct.pack('!i', tocpos))
 
 
-# Used by PYZOwner
-import pyi_iu
-
-
 class ZlibArchive(Archive):
     """
     ZlibArchive - an archive with compressed entries. Archive is read
@@ -288,7 +267,7 @@ class ZlibArchive(Archive):
     LEVEL = 9
     NO_COMPRESSION_LEVEL = 0
 
-    def __init__(self, path=None, offset=None, level=9, crypt=None):
+    def __init__(self, path=None, offset=None, level=9):
         if path is None:
             offset = 0
         elif offset is None:
@@ -307,18 +286,11 @@ class ZlibArchive(Archive):
 
         # Zlib compression level.
         self.LEVEL = level
-        if crypt is not None:
-            self.crypted = 1
-            self.key = (crypt + "*" * 32)[:32]
-        else:
-            self.crypted = 0
-            self.key = None
 
         Archive.__init__(self, path, offset)
 
         # dynamic import so not imported if not needed
         self._mod_zlib = None
-        self._mod_aes = None
 
         if self.LEVEL > self.NO_COMPRESSION_LEVEL:
             try:
@@ -326,13 +298,8 @@ class ZlibArchive(Archive):
             except ImportError:
                 raise RuntimeError('zlib required but cannot be imported')
 
-        # FIXME Cryptography is broken in PyInstaller.
-        if self.crypted:
-            self._mod_aes = __import__('AES')
-
-    def _iv(self, nm):
-        IV = nm * ((self._mod_aes.block_size + len(nm) - 1) // len(nm))
-        return IV[:self._mod_aes.block_size]
+        # TODO this attribute is deprecated and not used anymore.
+        self.crypted = 0
 
     def extract(self, name):
         (ispkg, pos, lngth) = self.toc.get(name, (0, None, 0))
@@ -340,16 +307,10 @@ class ZlibArchive(Archive):
             return None
         self.lib.seek(self.start + pos)
         obj = self.lib.read(lngth)
-        if self.crypted:
-            if self.key is None:
-                raise ImportError('decryption key not found')
-            obj = self._mod_aes.new(self.key, self._mod_aes.MODE_CFB, self._iv(name)).decrypt(obj)
         try:
             obj = self._mod_zlib.decompress(obj)
         except self._mod_zlib.error:
-            if not self.crypted:
-                raise
-            raise ImportError('invalid decryption key')
+            raise ImportError("PYZ entry '%s' failed to decompress" % name)
         try:
             co = marshal.loads(obj)
         except EOFError:
@@ -385,8 +346,6 @@ class ZlibArchive(Archive):
                 print e.args
                 raise
             obj = self._mod_zlib.compress(marshal.dumps(co), self.LEVEL)
-        if self.crypted:
-            obj = self._mod_aes.new(self.key, self._mod_aes.MODE_CFB, self._iv(nm)).encrypt(obj)
         self.toc[nm] = (ispkg, self.lib.tell(), len(obj))
         self.lib.write(obj)
 
@@ -400,112 +359,3 @@ class ZlibArchive(Archive):
     def checkmagic(self):
         Archive.checkmagic(self)
         self.LEVEL, self.crypted = struct.unpack('!iB', self.lib.read(5))
-
-
-class Keyfile(object):
-    def __init__(self, fn=None):
-        if fn is None:
-            fn = sys.argv[0]
-            if fn[-4] == '.':
-                fn = fn[:-4]
-            fn += ".key"
-
-        execfile(fn, {"__builtins__": None}, self.__dict__)
-        if not hasattr(self, "key"):
-            self.key = None
-
-
-class PYZOwner(pyi_iu.Owner):
-    """
-    Load bytecode of Python modules from the executable created by PyInstaller.
-
-    Python bytecode is zipped and appended to the executable.
-
-    NOTE: PYZ format cannot be replaced by zipimport module.
-
-    The problem is that we have no control over zipimport; for instance,
-    it doesn't work if the zip file is embedded into a PKG appended
-    to an executable, like we create in one-file.
-    """
-    def __init__(self, path):
-        try:
-            # Unzip zip archive bundled with the executable.
-            self.pyz = ZlibArchive(path)
-            self.pyz.checkmagic()
-        except (IOError, ArchiveReadError), e:
-            raise pyi_iu.OwnerError(e)
-        if self.pyz.crypted:
-            if not hasattr(sys, "keyfile"):
-                sys.keyfile = Keyfile()
-            self.pyz = ZlibArchive(path, crypt=sys.keyfile.key)
-        pyi_iu.Owner.__init__(self, path)
-
-    def getmod(self, nm, newmod=imp.new_module):
-        rslt = self.pyz.extract(nm)
-        if rslt is None:
-            return None
-        ispkg, bytecode = rslt
-        mod = newmod(nm)
-
-        # Replace bytecode.co_filename by something more meaningful:
-        # e.g. /absolute/path/frozen_executable/path/to/module/module_name.pyc
-        # Paths from developer machine are masked.
-        try:
-            # Set __file__ attribute of a module relative to the executable
-            # so that data files can be found. The absolute absolute path
-            # to the executable is taken from sys.prefix. In onefile mode it
-            # points to the temp directory where files are unpacked by PyInstaller.
-            abspath = sys.prefix
-            # Then, append the appropriate suffix (__init__.pyc for a package, or just .pyc for a module).
-            if ispkg:
-                mod.__file__ = pyi_iu._os_path_join(pyi_iu._os_path_join(abspath,
-                    nm.replace('.', pyi_iu._os_sep)), '__init__.pyc')
-            else:
-                mod.__file__ = pyi_iu._os_path_join(abspath,
-                    nm.replace('.', pyi_iu._os_sep) + '.pyc')
-        except AttributeError:
-            raise ImportError("PYZ entry '%s' (%s) is not a valid code object"
-                % (nm, repr(bytecode)))
-
-        # Python has modules and packages. A Python package is container
-        # for several modules or packages.
-        if ispkg:
-            # Since PYTHONHOME is set in bootloader, 'sys.prefix' points to the
-            # correct path where PyInstaller should find bundled dynamic
-            # libraries. In one-file mode it points to the tmp directory where
-            # bundled files are extracted at execution time.
-            localpath = sys.prefix
-
-            # A python packages has to have __path__ attribute.
-            mod.__path__ = [pyi_iu._os_path_dirname(mod.__file__), self.path, localpath,
-                ]
-
-            debug("PYZOwner setting %s's __path__: %s" % (nm, mod.__path__))
-
-            importer = pyi_iu.PathImportDirector(mod.__path__,
-                {self.path: PkgInPYZImporter(nm, self),
-                localpath: ExtInPkgImporter(localpath, nm)},
-                [pyi_iu.DirOwner])
-            mod.__importsub__ = importer.getmod
-
-        mod.__co__ = bytecode
-        return mod
-
-
-class PkgInPYZImporter(object):
-    def __init__(self, name, owner):
-        self.name = name
-        self.owner = owner
-
-    def getmod(self, nm):
-        debug("PkgInPYZImporter.getmod %s -> %s" % (nm, self.name + '.' + nm))
-        return self.owner.getmod(self.name + '.' + nm)
-
-
-class ExtInPkgImporter(pyi_iu.DirOwner):
-    def __init__(self, path, prefix):
-        pyi_iu.DirOwner.__init__(self, path)
-        self.prefix = prefix
-
-    def getmod(self, nm):
-        return pyi_iu.DirOwner.getmod(self, self.prefix + '.' + nm)
